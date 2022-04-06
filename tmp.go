@@ -8,6 +8,7 @@ import (
 // temporary file, may delete anytime.
 func main() {
 	fmt.Println(runtime.NumCPU())
+
 }
 
 func f1() {
