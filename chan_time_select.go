@@ -14,17 +14,20 @@ func main() {
 
 	go func() {
 		fmt.Println("---begin do task---")
-		time.Sleep(time.Millisecond * 3100)
-		fmt.Println("--end do task---")
+		// time.Sleep(time.Millisecond * 3100)
 
 		result <- 1
+		fmt.Println("--end do task---")
 	}()
 
+	time.Sleep(time.Second * 2)
 	select {
-	case e := <- result:
+	case e := <-result:
 		fmt.Printf("get result: %d\n", e)
-	case <- timeout2:
-			fmt.Println("get result timeout")
+	case <-timeout2:
+		fmt.Println("get result timeout")
 	}
-}
 
+	// wait until goroutine finish
+	time.Sleep(time.Second)
+}
