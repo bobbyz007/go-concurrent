@@ -1,5 +1,10 @@
 package util
 
+import (
+	"log"
+	"time"
+)
+
 // 无限重复
 func Repeat(done <-chan interface{}, values ...interface{}) <-chan interface{} {
 	valueStream := make(chan interface{})
@@ -64,6 +69,7 @@ func OrDone(done, c <-chan interface{}) <-chan interface{} {
 				return
 			// 检查c是否关闭
 			case v, ok := <-c:
+				log.Printf("ordone: %v\n", ok)
 				if ok == false {
 					return
 				}
@@ -110,6 +116,7 @@ func Bridge(done <-chan interface{}, chanStream <-chan <-chan interface{}) <-cha
 			var stream <-chan interface{}
 			select {
 			case maybeStream, ok := <-chanStream:
+				log.Printf("bridge: %v\n", ok)
 				if ok == false {
 					return
 				}
@@ -118,6 +125,7 @@ func Bridge(done <-chan interface{}, chanStream <-chan <-chan interface{}) <-cha
 				return
 			}
 
+			// 如果or 或 stream关闭，则不执行循环，防止valStream保存nil
 			for val := range OrDone(done, stream) {
 				select {
 				case valStream <- val:
@@ -128,4 +136,58 @@ func Bridge(done <-chan interface{}, chanStream <-chan <-chan interface{}) <-cha
 		}
 	}()
 	return valStream
+}
+
+// 基于heartbeat模式，代表被监控的goroutine
+type StartGoroutineFn func(done <-chan interface{}, pulseInterval time.Duration) (heartbeat <-chan interface{})
+
+// 返回类型是 startGoroutineFn，表示steward本身也是可以被监控的
+// timeout: ward的超时时间。 如果在timeout时间内 获取不到ward的心跳信息，则会重启ward
+func NewSteward(timeout time.Duration, startGoroutine StartGoroutineFn) StartGoroutineFn {
+	return func(done <-chan interface{}, pulseInterval time.Duration) <-chan interface{} {
+		heartbeat := make(chan interface{})
+		go func() {
+			defer close(heartbeat)
+
+			var wardDone chan interface{}
+			var wardHeartbeat <-chan interface{}
+			//  启动被监控者
+			startWard := func() {
+				wardDone = make(chan interface{})
+				// We want the ward goroutine to halt if either the steward is halted (done channel),
+				//or the steward wants to halt the ward goroutine (warDone channel)
+				wardHeartbeat = startGoroutine(OrDone(wardDone, done), timeout/2)
+			}
+			startWard()
+			pulse := time.Tick(pulseInterval)
+
+		monitorLoop:
+			for {
+				timeoutSignal := time.After(timeout)
+				for {
+					select {
+					// steward send out pulses
+					case <-pulse:
+						select {
+						case heartbeat <- struct{}{}:
+							log.Println("steward: send out heartbeat")
+						default:
+						}
+					// receive from the ward pulse, then continue monitoring
+					case <-wardHeartbeat:
+						continue monitorLoop
+					case <-timeoutSignal:
+						log.Println("steward: ward unhealthy; restarting")
+						close(wardDone)
+						startWard()
+						continue monitorLoop
+					case <-done:
+						return
+					}
+				}
+			}
+		}()
+
+		return heartbeat
+	}
 }
